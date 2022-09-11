@@ -1,0 +1,79 @@
+name: Build dex files
+
+on:
+  workflow_dispatch:
+    inputs:
+      jar_file_paths:
+        description: 'Jar file paths'
+        required: true 
+        type: string
+jobs:
+  build_dex_files:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v2
+
+      - name: Build dex files
+        shell: bash {0}
+        run: |
+          exit_on_error() {
+            echo "$1" 1>&2
+            exit 1
+          }
+
+          IFS=' ' read -a jar_file_paths <<< "${{ inputs.jar_file_paths }}"
+
+          for jar_file_path in "${jar_file_paths[@]}"; do
+            if [[ "$jar_file_path" != "libraries/"* ]]; then
+              exit_on_error "The jar file path \"$jar_file_path\" is not under libaries directory"
+            fi
+
+            if [[ "$jar_file_path" != *".jar" ]]; then
+              exit_on_error "The jar file path \"$jar_file_path\" is not for a jar file"
+            fi
+
+            if [[ ! -f "$jar_file_path" ]]; then
+              exit_on_error "The jar file does not exists at path \"$jar_file_path\""
+            fi
+          done
+
+          for jar_file_path in "${jar_file_paths[@]}"; do
+            jar_file_path_without_extension="${jar_file_path%.jar}"
+            dex_jar_file_path="${jar_file_path_without_extension}-dex.jar"
+            dex_checksum_file_path="${jar_file_path_without_extension}-dex.sha256sum"
+            dex_jar_file_parent_dir_path="$(dirname "$dex_jar_file_path")"
+            dex_jar_file_name="$(basename "$dex_jar_file_path")"
+            dex_checksum_file_name="$(basename "$dex_checksum_file_path")"
+
+            echo "Building dex file for jar file \"$jar_file_path\" at \"$dex_jar_file_path\""
+            if ! build-tools/29.0.3/dx --dex --output="$dex_jar_file_path" "$jar_file_path"; then
+              exit_on_error "Failed to build dex for jar file \"$jar_file_path\" at \"$dex_jar_file_path\""
+            fi
+
+            echo "Generating sha25sums for dex file \"$dex_jar_file_path\" at \"$dex_checksum_file_path\""
+            if ! (cd "$dex_jar_file_parent_dir_path"; sha256sum "$dex_jar_file_name" > "$dex_checksum_file_name"); then
+              exit_on_error "Failed to generate sha25sums for dex file \"$dex_jar_file_path\" at \"$dex_checksum_file_path\""
+            fi
+
+            git add "$dex_jar_file_path"
+            git add "$dex_checksum_file_path"
+
+            commit_message_body+=$'\n\n'"$jar_file_path"$'\n'"$dex_jar_file_path"$'\n'"$dex_checksum_file_path"
+          done
+
+          git config --global user.name 'agnostic-apollo'
+          git config --global user.email 'agnosticapollo@gmail.com'
+
+          if ! git commit -m "Added: Add dex files$commit_message_body"; then
+              exit_on_error "Failed to commit files"
+          fi
+
+          # Push branch
+          echo "Pushing branch"
+          if ! git push origin; then
+              exit_on_error "Failed to push branch"
+          fi
+          
